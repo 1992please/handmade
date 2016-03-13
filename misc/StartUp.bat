@@ -1,2 +1,1 @@
-@echo off
-subst w: "D:\Work\CPrograms"
+subst w: D:/Work
