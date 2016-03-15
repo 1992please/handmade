@@ -1,0 +1,3 @@
+﻿  win32_handmade.cpp
+d:\work\cprograms\handmade hero\handmade hero\win32_handmade.cpp(61): error C2440: '=': cannot convert from 'const char [24]' to 'LPCWSTR'
+  d:\work\cprograms\handmade hero\handmade hero\win32_handmade.cpp(61): note: Types pointed to are unrelated; conversion requires reinterpret_cast, C-style cast or function-style cast
