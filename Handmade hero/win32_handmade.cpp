@@ -1,5 +1,6 @@
 #include <windows.h>
 #include <stdint.h>
+#include <Xinput.h>
 
 #define internal static
 #define local_persist static 
@@ -27,8 +28,6 @@ struct FOffscreenBuffer
 	int Pitch;
 	int BytesPerPixel;
 };
-global_variable bool Running;
-global_variable FOffscreenBuffer GlobalBackBuffer;
 
 struct FWindowDimension
 {
@@ -36,7 +35,45 @@ struct FWindowDimension
 	int Height;
 };
 
-FWindowDimension GetWindowDimension(HWND Window)
+// this is global for now
+global_variable bool GlobalRunning;
+global_variable FOffscreenBuffer GlobalBackBuffer;
+
+// This is our support for XInputGetState
+#define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
+typedef X_INPUT_GET_STATE(x_input_get_state);
+X_INPUT_GET_STATE(XInputGetStateStub)
+{
+	return 1;
+}
+global_variable x_input_get_state *XInputGetState_ = XInputGetStateStub;
+#define XInputGetState XInputGetState_
+
+// This is our support for XInputSetState
+#define X_INPUT_SET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_VIBRATION* pVibration)
+typedef X_INPUT_SET_STATE(x_input_set_state);
+X_INPUT_SET_STATE(XInputSetStateStub)
+{
+	return 1;
+}
+global_variable x_input_set_state *XInputSetState_ = XInputSetStateStub;
+#define XInputSetState XInputSetState_
+
+
+
+
+internal void LoadXInput()
+{
+	HMODULE XInputLibrary = LoadLibrary("xinput1_3.dll");
+
+	if (XInputLibrary)
+	{
+		XInputGetState = (x_input_get_state *)GetProcAddress(XInputLibrary, "XInputGetState");
+		XInputSetState = (x_input_set_state *)GetProcAddress(XInputLibrary, "XInputSetState");
+	}
+}
+
+internal FWindowDimension GetWindowDimension(HWND Window)
 {
 	FWindowDimension Result;
 	RECT ClientRect;
@@ -46,20 +83,20 @@ FWindowDimension GetWindowDimension(HWND Window)
 	return Result;
 }
 
-internal void RenderWeirdGradient(FOffscreenBuffer Buffer,int XOffset, int YOffset)
+internal void RenderWeirdGradient(FOffscreenBuffer* Buffer,int XOffset, int YOffset)
 {
-	uint8 *Row = (uint8*)Buffer.Memory;
-	for (int Y = 0; Y < Buffer.Height; ++Y)
+	uint8 *Row = (uint8*)Buffer->Memory;
+	for (int Y = 0; Y < Buffer->Height; ++Y)
 	{
 		uint32 *Pixel = (uint32*)Row;
-		for (int X = 0; X < Buffer.Width; ++X)
+		for (int X = 0; X < Buffer->Width; ++X)
 		{
 			uint8 Blue = Y + XOffset;
 			uint8 Green = X + YOffset;
 			*Pixel++ = ((Green<<8)|(Blue));
 		}
 
-		Row += Buffer.Pitch;
+		Row += Buffer->Pitch;
 	}
 }
 
@@ -91,10 +128,10 @@ internal void ResizeDIBSection(FOffscreenBuffer* Buffer,int Width, int Height)
 
 }
 
-internal void DisplayBufferInWindow(HDC DeviceContext, FOffscreenBuffer Buffer, int WindowWidth, int WindowHeight)
+internal void DisplayBufferInWindow(HDC DeviceContext, FOffscreenBuffer* Buffer, int WindowWidth, int WindowHeight)
 {
 	// TODO Aspect ratio correction
-	StretchDIBits(DeviceContext, 0, 0, WindowWidth, WindowHeight, 0, 0, Buffer.Width, Buffer.Height, Buffer.Memory, &Buffer.Info, DIB_RGB_COLORS, SRCCOPY);
+	StretchDIBits(DeviceContext, 0, 0, WindowWidth, WindowHeight, 0, 0, Buffer->Width, Buffer->Height, Buffer->Memory, &Buffer->Info, DIB_RGB_COLORS, SRCCOPY);
 }
 
 LRESULT CALLBACK MainWindowCallback(
@@ -111,25 +148,73 @@ LRESULT CALLBACK MainWindowCallback(
 		case WM_CLOSE:
 		{
 			// TODO Handle this with a message to the user
-			Running = false;
+			GlobalRunning = false;
 			break;
 		}
 		case WM_DESTROY:
 		{
 			// TODO Handle this as an error recreate window
-			Running = false;
+			GlobalRunning = false;
 			break;
 		}
 		case WM_SIZE:
 		{
 			
-			OutputDebugStringA("WM_SIZE\n");
+			OutputDebugString("WM_SIZE\n");
+			break;
+		}
+		case WM_SYSKEYUP:
+		case WM_SYSKEYDOWN:
+		case WM_KEYUP:
+		case WM_KEYDOWN:
+		{
+			bool WasDown = (lParam & 1<<30) != 0;
+			bool IsDown = (lParam & 1<<31) == 0;
+			if (WasDown != IsDown)
+			{
+				if (wParam == 'W')
+				{
+				}
+				else if (wParam == 'A')
+				{
+				}
+				else if (wParam == 'S')
+				{
+				}
+				else if (wParam == 'D')
+				{
+				}
+				else if (wParam == 'E')
+				{
+				}
+				else if (wParam == 'Q')
+				{
+				}
+				else if (wParam == VK_UP)
+				{
+				}
+				else if (wParam == VK_DOWN)
+				{
+				}
+				else if (wParam == VK_RIGHT)
+				{
+				}
+				else if (wParam == VK_LEFT)
+				{
+				}
+				else if (wParam == VK_ESCAPE)
+				{
+				}
+				else if (wParam == VK_SPACE)
+				{
+				}
+			}
 			break;
 		}
 
 		case WM_ACTIVATEAPP:
 		{
-			OutputDebugStringA("WM_ACTIVATEAPP\n");
+			OutputDebugString("WM_ACTIVATEAPP\n");
 
 			break;
 		}
@@ -145,7 +230,7 @@ LRESULT CALLBACK MainWindowCallback(
 
 			FWindowDimension Dimension = GetWindowDimension(Window);
 
-			DisplayBufferInWindow(DeviceContext, GlobalBackBuffer, Dimension.Width, Dimension.Height);
+			DisplayBufferInWindow(DeviceContext, &GlobalBackBuffer, Dimension.Width, Dimension.Height);
 			EndPaint(Window, &Paint);
 			break;
 		}
@@ -160,6 +245,8 @@ LRESULT CALLBACK MainWindowCallback(
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+	LoadXInput();
+
 	WNDCLASS WindowClass = {};
 
 	ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
@@ -177,31 +264,62 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
 	if (WindowHandle)
 	{
-		Running = true;
+		GlobalRunning = true;
 		int XOffset = 0;
 		int YOffset = 0;
-		while (Running)
+		while (GlobalRunning)
 		{
 			MSG Message;
-			if (PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
+			while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
 			{
 				if (Message.message == WM_QUIT)
 				{
-					Running = false;
+					GlobalRunning = false;
 				}
 				TranslateMessage(&Message);
 				DispatchMessage(&Message);
+			}
+
+			// TODO Should we pull more frequently.
+			for (DWORD UserIndex = 0; UserIndex< XUSER_MAX_COUNT; UserIndex++)
+			{
+				XINPUT_STATE ControllerState;
+				if (XInputGetState(UserIndex, &ControllerState) == ERROR_SUCCESS)
+				{
+					// This controller is plugged in
+					XINPUT_GAMEPAD* Pad = &ControllerState.Gamepad;
+
+					bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
+					bool Down= (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+					bool Left = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+					bool Right= (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
+					bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START) != 0;
+					bool Back = (Pad->wButtons & XINPUT_GAMEPAD_BACK) != 0;
+					bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+					bool RightShoulder = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+					bool AButton = (Pad->wButtons & XINPUT_GAMEPAD_A) != 0;
+					bool BButton = (Pad->wButtons & XINPUT_GAMEPAD_B) != 0;
+					bool XButton = (Pad->wButtons & XINPUT_GAMEPAD_X) != 0;
+					bool YButton = (Pad->wButtons & XINPUT_GAMEPAD_Y) != 0;
+
+					int16 StickX = Pad->sThumbLX;
+					int16 StickY = Pad->sThumbLY;
+				}
+				else
+				{
+					// the controller is not available
+				}
 
 			}
+
 			HDC DeviceContext = GetDC(WindowHandle);
 			FWindowDimension Dimension = GetWindowDimension(WindowHandle);
 
-			DisplayBufferInWindow(DeviceContext, GlobalBackBuffer, Dimension.Width, Dimension.Height);
+			DisplayBufferInWindow(DeviceContext, &GlobalBackBuffer, Dimension.Width, Dimension.Height);
 
-			RenderWeirdGradient(GlobalBackBuffer, XOffset, YOffset);
+			RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
 
 			ReleaseDC(WindowHandle, DeviceContext);
-			XOffset++;
 			YOffset++;
 		}
 	}
