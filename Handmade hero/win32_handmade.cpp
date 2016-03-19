@@ -109,14 +109,14 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 		LPDIRECTSOUND DirectSound;
 		if (DirectSoundCreate && DirectSoundCreate(0, &DirectSound, 0) == DS_OK)
 		{
-			WAVEFORMATEX WaveFormat = {};
+			WAVEFORMATEX WaveFormat;
 			WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
 			WaveFormat.nChannels = 2;
 			WaveFormat.nSamplesPerSec = SamplesPerSecond;
+			WaveFormat.wBitsPerSample = 16;
 			WaveFormat.nBlockAlign = WaveFormat.nChannels * WaveFormat.wBitsPerSample / 8;
 			WaveFormat.nAvgBytesPerSec = WaveFormat.nBlockAlign * WaveFormat.nSamplesPerSec;
-			WaveFormat.wBitsPerSample = 16;
-			WaveFormat.cbSize = 8;
+			WaveFormat.cbSize = 0;
 
 			if (DirectSound->SetCooperativeLevel(Window, DSSCL_PRIORITY) == DS_OK)
 			{
@@ -133,7 +133,7 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 					if (Error == DS_OK)
 					{
 						// Now we have finally set the format
-						OutputDebugString("LOL");
+						OutputDebugString("LOL\n");
 					}
 					else
 					{
@@ -157,10 +157,10 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 			BufferDescription.lpwfxFormat = &WaveFormat;
 
 			LPDIRECTSOUNDBUFFER SecondaryBuffer;
-			HRESULT Error = (DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0) == DS_OK);
+			HRESULT Error = (DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0));
 			if (Error == DS_OK)
 			{
-				OutputDebugString("LOL1");
+				OutputDebugString("LOL1\n");
 			}
 			// Start it playing!
 		}
