@@ -1,6 +1,7 @@
 #include <windows.h>
 #include <stdint.h>
-#include <Xinput.h>
+#include <xinput.h>
+#include <dsound.h>
 
 #define internal static
 #define local_persist static 
@@ -44,7 +45,7 @@ global_variable FOffscreenBuffer GlobalBackBuffer;
 typedef X_INPUT_GET_STATE(x_input_get_state);
 X_INPUT_GET_STATE(XInputGetStateStub)
 {
-	return 1;
+	return ERROR_DEVICE_NOT_CONNECTED;
 }
 global_variable x_input_get_state *XInputGetState_ = XInputGetStateStub;
 #define XInputGetState XInputGetState_
@@ -54,22 +55,34 @@ global_variable x_input_get_state *XInputGetState_ = XInputGetStateStub;
 typedef X_INPUT_SET_STATE(x_input_set_state);
 X_INPUT_SET_STATE(XInputSetStateStub)
 {
-	return 1;
+	return ERROR_DEVICE_NOT_CONNECTED;
 }
 global_variable x_input_set_state *XInputSetState_ = XInputSetStateStub;
 #define XInputSetState XInputSetState_
 
+#define DIRECT_SOUND_CREATE(name) HRESULT WINAPI name(LPCGUID pcGuidDevice, LPDIRECTSOUND *ppDS, LPUNKNOWN pUnkOuter)
+typedef DIRECT_SOUND_CREATE(direct_sound_create);
 
 
 
 internal void LoadXInput()
 {
+	// TODO test this on windows 10
 	HMODULE XInputLibrary = LoadLibrary("xinput1_3.dll");
+	if (!XInputLibrary)
+	{
+		XInputLibrary = LoadLibrary("xinput1_4.dll");
+		// TODO : Diagnostic
+	}
 
 	if (XInputLibrary)
 	{
 		XInputGetState = (x_input_get_state *)GetProcAddress(XInputLibrary, "XInputGetState");
 		XInputSetState = (x_input_set_state *)GetProcAddress(XInputLibrary, "XInputSetState");
+	}
+	else
+	{
+		// TODO Diagnostic
 	}
 }
 
@@ -83,7 +96,89 @@ internal FWindowDimension GetWindowDimension(HWND Window)
 	return Result;
 }
 
-internal void RenderWeirdGradient(FOffscreenBuffer* Buffer,int XOffset, int YOffset)
+internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
+{
+	// Load the sound library.
+	HMODULE DSoundLibrary = LoadLibrary("dsound.dll");
+
+	if (DSoundLibrary)
+	{
+		// Get DirectSound object!
+		direct_sound_create *DirectSoundCreate = (direct_sound_create* )GetProcAddress(DSoundLibrary, "DirectSoundCreate");
+		
+		LPDIRECTSOUND DirectSound;
+		if (DirectSoundCreate && DirectSoundCreate(0, &DirectSound, 0) == DS_OK)
+		{
+			WAVEFORMATEX WaveFormat = {};
+			WaveFormat.wFormatTag = WAVE_FORMAT_PCM;
+			WaveFormat.nChannels = 2;
+			WaveFormat.nSamplesPerSec = SamplesPerSecond;
+			WaveFormat.nBlockAlign = WaveFormat.nChannels * WaveFormat.wBitsPerSample / 8;
+			WaveFormat.nAvgBytesPerSec = WaveFormat.nBlockAlign * WaveFormat.nSamplesPerSec;
+			WaveFormat.wBitsPerSample = 16;
+			WaveFormat.cbSize = 8;
+
+			if (DirectSound->SetCooperativeLevel(Window, DSSCL_PRIORITY) == DS_OK)
+			{
+				// Create a primary buffer
+				DSBUFFERDESC  BufferDescription = {};
+				BufferDescription.dwSize = sizeof(BufferDescription);
+				BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
+
+				LPDIRECTSOUNDBUFFER PrimaryBuffer;
+				
+				if (DirectSound->CreateSoundBuffer(&BufferDescription, &PrimaryBuffer, 0) == DS_OK)
+				{
+					HRESULT Error= PrimaryBuffer->SetFormat(&WaveFormat);
+					if (Error == DS_OK)
+					{
+						// Now we have finally set the format
+						OutputDebugString("LOL");
+					}
+					else
+					{
+						// TODO Diagnostic
+					}
+				}
+				else
+				{
+					// TODO Diagnostic 
+				}
+			}
+			else
+			{
+				// TODO Diagnostic
+			}
+			// Create a secondary buffer
+			DSBUFFERDESC  BufferDescription = {};
+			BufferDescription.dwSize = sizeof(BufferDescription);
+			BufferDescription.dwFlags = 0;
+			BufferDescription.dwBufferBytes = BufferSize;
+			BufferDescription.lpwfxFormat = &WaveFormat;
+
+			LPDIRECTSOUNDBUFFER SecondaryBuffer;
+			HRESULT Error = (DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0) == DS_OK);
+			if (Error == DS_OK)
+			{
+				OutputDebugString("LOL1");
+			}
+			// Start it playing!
+		}
+		else
+		{
+			// TODO Diagnostic
+		}
+
+	}
+	else
+	{
+		// TODO Diagnostic
+	}
+	
+
+}
+
+internal void RenderWeirdGradient(FOffscreenBuffer* Buffer, int XOffset, int YOffset)
 {
 	uint8 *Row = (uint8*)Buffer->Memory;
 	for (int Y = 0; Y < Buffer->Height; ++Y)
@@ -91,16 +186,16 @@ internal void RenderWeirdGradient(FOffscreenBuffer* Buffer,int XOffset, int YOff
 		uint32 *Pixel = (uint32*)Row;
 		for (int X = 0; X < Buffer->Width; ++X)
 		{
-			uint8 Blue = Y + XOffset;
-			uint8 Green = X + YOffset;
-			*Pixel++ = ((Green<<8)|(Blue));
+			uint8 Blue = Y + YOffset;
+			uint8 Green = X + XOffset;
+			*Pixel++ = ((Green << 8) | (Blue));
 		}
 
 		Row += Buffer->Pitch;
 	}
 }
 
-internal void ResizeDIBSection(FOffscreenBuffer* Buffer,int Width, int Height)
+internal void ResizeDIBSection(FOffscreenBuffer* Buffer, int Width, int Height)
 {
 	if (Buffer->Memory)
 	{
@@ -112,7 +207,7 @@ internal void ResizeDIBSection(FOffscreenBuffer* Buffer,int Width, int Height)
 
 	Buffer->BytesPerPixel = 4;
 
-	Buffer->Info.bmiHeader.biSize = sizeof(Buffer->Info.bmiHeader); 
+	Buffer->Info.bmiHeader.biSize = sizeof(Buffer->Info.bmiHeader);
 	Buffer->Info.bmiHeader.biWidth = Buffer->Width;
 	Buffer->Info.bmiHeader.biHeight = -Buffer->Height;
 	Buffer->Info.bmiHeader.biPlanes = 1;
@@ -123,7 +218,7 @@ internal void ResizeDIBSection(FOffscreenBuffer* Buffer,int Width, int Height)
 	Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
 	// TODO probably clear this to black 
-	
+
 	Buffer->Pitch = Buffer->Width * Buffer->BytesPerPixel;
 
 }
@@ -159,7 +254,7 @@ LRESULT CALLBACK MainWindowCallback(
 		}
 		case WM_SIZE:
 		{
-			
+
 			OutputDebugString("WM_SIZE\n");
 			break;
 		}
@@ -168,8 +263,9 @@ LRESULT CALLBACK MainWindowCallback(
 		case WM_KEYUP:
 		case WM_KEYDOWN:
 		{
-			bool WasDown = (lParam & 1<<30) != 0;
-			bool IsDown = (lParam & 1<<31) == 0;
+			bool WasDown = (lParam & 1 << 30) != 0;
+			bool IsDown = (lParam & 1 << 31) == 0;
+			bool AltKeyWasDown = (lParam & 1 << 29) != 0;
 			if (WasDown != IsDown)
 			{
 				if (wParam == 'W')
@@ -207,6 +303,10 @@ LRESULT CALLBACK MainWindowCallback(
 				}
 				else if (wParam == VK_SPACE)
 				{
+				}
+				else if (AltKeyWasDown && wParam == VK_F4)
+				{
+					GlobalRunning = false;
 				}
 			}
 			break;
@@ -267,10 +367,12 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 		GlobalRunning = true;
 		int XOffset = 0;
 		int YOffset = 0;
+
+		InitDSound(WindowHandle, 48000, 48000 * sizeof(int16) * 2);
 		while (GlobalRunning)
 		{
 			MSG Message;
-			while(PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
+			while (PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
 			{
 				if (Message.message == WM_QUIT)
 				{
@@ -281,7 +383,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 			}
 
 			// TODO Should we pull more frequently.
-			for (DWORD UserIndex = 0; UserIndex< XUSER_MAX_COUNT; UserIndex++)
+			for (DWORD UserIndex = 0; UserIndex < XUSER_MAX_COUNT; UserIndex++)
 			{
 				XINPUT_STATE ControllerState;
 				if (XInputGetState(UserIndex, &ControllerState) == ERROR_SUCCESS)
@@ -290,9 +392,9 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 					XINPUT_GAMEPAD* Pad = &ControllerState.Gamepad;
 
 					bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
-					bool Down= (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+					bool Down = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
 					bool Left = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-					bool Right= (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
+					bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
 					bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START) != 0;
 					bool Back = (Pad->wButtons & XINPUT_GAMEPAD_BACK) != 0;
 					bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
@@ -304,6 +406,8 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
 					int16 StickX = Pad->sThumbLX;
 					int16 StickY = Pad->sThumbLY;
+					if(AButton)
+						XOffset++;
 				}
 				else
 				{
