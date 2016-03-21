@@ -39,6 +39,7 @@ struct FWindowDimension
 // this is global for now
 global_variable bool GlobalRunning;
 global_variable FOffscreenBuffer GlobalBackBuffer;
+global_variable LPDIRECTSOUNDBUFFER GlobalSecondaryBuffer;
 
 // This is our support for XInputGetState
 #define X_INPUT_GET_STATE(name) DWORD WINAPI name(DWORD dwUserIndex, XINPUT_STATE* pState)
@@ -104,8 +105,8 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 	if (DSoundLibrary)
 	{
 		// Get DirectSound object!
-		direct_sound_create *DirectSoundCreate = (direct_sound_create* )GetProcAddress(DSoundLibrary, "DirectSoundCreate");
-		
+		direct_sound_create *DirectSoundCreate = (direct_sound_create*)GetProcAddress(DSoundLibrary, "DirectSoundCreate");
+
 		LPDIRECTSOUND DirectSound;
 		if (DirectSoundCreate && DirectSoundCreate(0, &DirectSound, 0) == DS_OK)
 		{
@@ -126,14 +127,13 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 				BufferDescription.dwFlags = DSBCAPS_PRIMARYBUFFER;
 
 				LPDIRECTSOUNDBUFFER PrimaryBuffer;
-				
+
 				if (DirectSound->CreateSoundBuffer(&BufferDescription, &PrimaryBuffer, 0) == DS_OK)
 				{
-					HRESULT Error= PrimaryBuffer->SetFormat(&WaveFormat);
-					if (Error == DS_OK)
+					if (PrimaryBuffer->SetFormat(&WaveFormat) == DS_OK)
 					{
 						// Now we have finally set the format
-						OutputDebugString("LOL\n");
+						OutputDebugString("Creating primary buffer succedded\n");
 					}
 					else
 					{
@@ -156,11 +156,9 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 			BufferDescription.dwBufferBytes = BufferSize;
 			BufferDescription.lpwfxFormat = &WaveFormat;
 
-			LPDIRECTSOUNDBUFFER SecondaryBuffer;
-			HRESULT Error = (DirectSound->CreateSoundBuffer(&BufferDescription, &SecondaryBuffer, 0));
-			if (Error == DS_OK)
+			if (DirectSound->CreateSoundBuffer(&BufferDescription, &GlobalSecondaryBuffer, 0) == DS_OK)
 			{
-				OutputDebugString("LOL1\n");
+				OutputDebugString("Creating secondary buffer succedded\n");
 			}
 			// Start it playing!
 		}
@@ -174,7 +172,7 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 	{
 		// TODO Diagnostic
 	}
-	
+
 
 }
 
@@ -195,7 +193,7 @@ internal void RenderWeirdGradient(FOffscreenBuffer* Buffer, int XOffset, int YOf
 	}
 }
 
-internal void ResizeDIBSection(FOffscreenBuffer* Buffer, int Width, int Height)
+internal void InitializeBitBltBuffer(FOffscreenBuffer* Buffer, int Width, int Height)
 {
 	if (Buffer->Memory)
 	{
@@ -215,7 +213,7 @@ internal void ResizeDIBSection(FOffscreenBuffer* Buffer, int Width, int Height)
 	Buffer->Info.bmiHeader.biCompression = BI_RGB;
 
 	int BitmapMemorySize = Buffer->BytesPerPixel * Buffer->Width * Buffer->Height;
-	Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
+	Buffer->Memory = VirtualAlloc(0, BitmapMemorySize, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
 	// TODO probably clear this to black 
 
@@ -348,8 +346,9 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 	LoadXInput();
 
 	WNDCLASS WindowClass = {};
-
-	ResizeDIBSection(&GlobalBackBuffer, 1280, 720);
+	/******** Initialize the draw buffer ********/
+	InitializeBitBltBuffer(&GlobalBackBuffer, 1280, 720);
+	/************************************************/
 
 	WindowClass.style = CS_HREDRAW | CS_VREDRAW;
 	WindowClass.lpfnWndProc = MainWindowCallback;
@@ -358,78 +357,159 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 	// WindowClass.lpszMenuName;
 	WindowClass.lpszClassName = "HandmadeHeroWindowClass";
 
-	RegisterClass(&WindowClass);
-
-	HWND WindowHandle = CreateWindowEx(0, WindowClass.lpszClassName, "Handmade Hero", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, hInstance, 0);
-
-	if (WindowHandle)
+	if (RegisterClass(&WindowClass))
 	{
-		GlobalRunning = true;
-		int XOffset = 0;
-		int YOffset = 0;
+		HWND WindowHandle = CreateWindowEx(0, WindowClass.lpszClassName, "Handmade Hero", WS_OVERLAPPEDWINDOW | WS_VISIBLE, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, hInstance, 0);
 
-		InitDSound(WindowHandle, 48000, 48000 * sizeof(int16) * 2);
-		while (GlobalRunning)
+		if (WindowHandle)
 		{
-			MSG Message;
-			while (PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
+			GlobalRunning = true;
+			// values for animatiing the gradient
+			int XOffset = 0;
+			int YOffset = 0;
+			/**************************************** Initializing Sound ****************************************/
+			int SamplesPerSec = 48000;
+			int BytesPerSample = sizeof(int16) * 2;
+			// SecondaryBufferSize can be set anything.
+			int SecondaryBufferSize = SamplesPerSec * BytesPerSample;
+			InitDSound(WindowHandle, SamplesPerSec, SecondaryBufferSize);
+			bool SoundIsPlaying = false;
+			// Values for middle c
+			int ToneHz = 256;
+			int16 ToneVolume = 6000;
+			uint32 RunningSampleIndex = 0;
+			int SquareWavePeriod = SamplesPerSec / ToneHz;
+			int HalfSquareWavePeriod = SquareWavePeriod / 2;
+			/***************************************************************************************************/
+
+			while (GlobalRunning)
 			{
-				if (Message.message == WM_QUIT)
+				MSG Message;
+				while (PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
 				{
-					GlobalRunning = false;
+					if (Message.message == WM_QUIT)
+					{
+						GlobalRunning = false;
+					}
+					TranslateMessage(&Message);
+					DispatchMessage(&Message);
 				}
-				TranslateMessage(&Message);
-				DispatchMessage(&Message);
+				/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+				// Getting The Input from Gamepad
+				/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+				// TODO Should we pull more frequently.
+				for (DWORD UserIndex = 0; UserIndex < XUSER_MAX_COUNT; UserIndex++)
+				{
+					XINPUT_STATE ControllerState;
+					if (XInputGetState(UserIndex, &ControllerState) == ERROR_SUCCESS)
+					{
+						// This controller is plugged in
+						XINPUT_GAMEPAD* Pad = &ControllerState.Gamepad;
+
+						bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
+						bool Down = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
+						bool Left = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
+						bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
+						bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START) != 0;
+						bool Back = (Pad->wButtons & XINPUT_GAMEPAD_BACK) != 0;
+						bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
+						bool RightShoulder = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
+						bool AButton = (Pad->wButtons & XINPUT_GAMEPAD_A) != 0;
+						bool BButton = (Pad->wButtons & XINPUT_GAMEPAD_B) != 0;
+						bool XButton = (Pad->wButtons & XINPUT_GAMEPAD_X) != 0;
+						bool YButton = (Pad->wButtons & XINPUT_GAMEPAD_Y) != 0;
+
+						int16 StickX = Pad->sThumbLX;
+						int16 StickY = Pad->sThumbLY;
+						if (AButton)
+							XOffset++;
+					}
+					else
+					{
+						// the controller is not available
+					}
+
+				}
+				/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+				// Drawing Gradient
+				/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+				HDC DeviceContext = GetDC(WindowHandle);
+
+				FWindowDimension Dimension = GetWindowDimension(WindowHandle);
+				DisplayBufferInWindow(DeviceContext, &GlobalBackBuffer, Dimension.Width, Dimension.Height);
+				RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
+				YOffset++;
+				ReleaseDC(WindowHandle, DeviceContext);
+				/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+				// Direct sound output test
+				/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+				DWORD PlayCursor;
+				DWORD WriteCursor;
+				if (GlobalSecondaryBuffer->GetCurrentPosition(&PlayCursor, &WriteCursor) == DS_OK)
+				{
+					DWORD ByteToLock = RunningSampleIndex * BytesPerSample % SecondaryBufferSize;
+					DWORD BytesToWrite;
+					if (ByteToLock == PlayCursor)
+					{
+						BytesToWrite = SecondaryBufferSize;
+					}
+					else if (ByteToLock > PlayCursor)
+					{
+						BytesToWrite = (SecondaryBufferSize - ByteToLock) ;
+						BytesToWrite += PlayCursor;
+					}
+					else
+					{
+						BytesToWrite = PlayCursor - ByteToLock;
+					}
+
+					
+	
+					void *Region1;
+					DWORD Region1Size;
+					void *Region2;
+					DWORD Region2Size;
+
+
+					if (GlobalSecondaryBuffer->Lock(ByteToLock, BytesToWrite, &Region1, &Region1Size, &Region2, &Region2Size, 0) == DS_OK)
+					{
+						// TODO assert that Region1Size/Region2Size is valid 
+
+						int16 *SampleOut = (int16*)Region1;
+						DWORD Region1SampleCount = Region1Size / BytesPerSample;
+						for (DWORD SampleIndex = 0; SampleIndex < Region1SampleCount; SampleIndex++)
+						{
+							int16 SampleValue = ((RunningSampleIndex++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
+							*SampleOut++ = SampleValue;
+							*SampleOut++ = SampleValue;
+						}
+
+						SampleOut = (int16*) Region2;
+						DWORD Region2SampleCount = Region2Size / BytesPerSample;
+						for (DWORD SampleIndex = 0; SampleIndex < Region2SampleCount; SampleIndex++)
+						{
+							int16 SampleValue = ((RunningSampleIndex++ / HalfSquareWavePeriod) % 2) ? ToneVolume : -ToneVolume;
+							*SampleOut++ = SampleValue;
+							*SampleOut++ = SampleValue;
+						}
+					}
+					GlobalSecondaryBuffer->Unlock(Region1, Region1Size, Region2, Region2Size);
+				}
+				if (!SoundIsPlaying)
+				{
+					GlobalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
+					SoundIsPlaying = true;
+				}
 			}
-
-			// TODO Should we pull more frequently.
-			for (DWORD UserIndex = 0; UserIndex < XUSER_MAX_COUNT; UserIndex++)
-			{
-				XINPUT_STATE ControllerState;
-				if (XInputGetState(UserIndex, &ControllerState) == ERROR_SUCCESS)
-				{
-					// This controller is plugged in
-					XINPUT_GAMEPAD* Pad = &ControllerState.Gamepad;
-
-					bool Up = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_UP) != 0;
-					bool Down = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_DOWN) != 0;
-					bool Left = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_LEFT) != 0;
-					bool Right = (Pad->wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) != 0;
-					bool Start = (Pad->wButtons & XINPUT_GAMEPAD_START) != 0;
-					bool Back = (Pad->wButtons & XINPUT_GAMEPAD_BACK) != 0;
-					bool LeftShoulder = (Pad->wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0;
-					bool RightShoulder = (Pad->wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0;
-					bool AButton = (Pad->wButtons & XINPUT_GAMEPAD_A) != 0;
-					bool BButton = (Pad->wButtons & XINPUT_GAMEPAD_B) != 0;
-					bool XButton = (Pad->wButtons & XINPUT_GAMEPAD_X) != 0;
-					bool YButton = (Pad->wButtons & XINPUT_GAMEPAD_Y) != 0;
-
-					int16 StickX = Pad->sThumbLX;
-					int16 StickY = Pad->sThumbLY;
-					if(AButton)
-						XOffset++;
-				}
-				else
-				{
-					// the controller is not available
-				}
-
-			}
-
-			HDC DeviceContext = GetDC(WindowHandle);
-			FWindowDimension Dimension = GetWindowDimension(WindowHandle);
-
-			DisplayBufferInWindow(DeviceContext, &GlobalBackBuffer, Dimension.Width, Dimension.Height);
-
-			RenderWeirdGradient(&GlobalBackBuffer, XOffset, YOffset);
-
-			ReleaseDC(WindowHandle, DeviceContext);
-			YOffset++;
+		}
+		else
+		{
+			// TODO Logging
 		}
 	}
 	else
 	{
-		// TODO add error handle here
+		// TODO Logging
 	}
 	return 0;
 }
