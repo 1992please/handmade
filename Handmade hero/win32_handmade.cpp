@@ -183,8 +183,6 @@ internal void InitDSound(HWND Window, int32 SamplesPerSecond, int32 BufferSize)
 	{
 		// TODO Diagnostic
 	}
-
-
 }
 
 internal void RenderWeirdGradient(FOffscreenBuffer* Buffer, int XOffset, int YOffset)
@@ -229,7 +227,6 @@ internal void InitializeBitBltBuffer(FOffscreenBuffer* Buffer, int Width, int He
 	// TODO probably clear this to black 
 
 	Buffer->Pitch = Buffer->Width * Buffer->BytesPerPixel;
-
 }
 
 internal void DisplayBufferInWindow(HDC DeviceContext, FOffscreenBuffer* Buffer, int WindowWidth, int WindowHeight)
@@ -396,6 +393,10 @@ LRESULT CALLBACK MainWindowCallback(HWND Window, UINT uMsg, WPARAM wParam, LPARA
 
 int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
+	LARGE_INTEGER PerformanceFrequencyResult;
+	QueryPerformanceFrequency(&PerformanceFrequencyResult);
+	int64 PerfCounterFreq = PerformanceFrequencyResult.QuadPart;
+
 	LoadXInput();
 
 	WNDCLASS WindowClass = {};
@@ -430,15 +431,20 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 			SoundOutput.ToneVolume = 6000;
 			SoundOutput.RunningSampleIndex = 0;
 			SoundOutput.WavePeriod = SoundOutput.SamplesPerSec / SoundOutput.ToneHz;
-			SoundOutput.LatencySampleCount = SoundOutput.SamplesPerSec /15;
+			SoundOutput.LatencySampleCount = SoundOutput.SamplesPerSec / 15;
 			InitDSound(WindowHandle, SoundOutput.SamplesPerSec, SoundOutput.SecondaryBufferSize);
 			FillSoundBuffer(&SoundOutput, 0, (SoundOutput.LatencySampleCount * SoundOutput.BytesPerSample) % SoundOutput.SecondaryBufferSize);
 			GlobalSecondaryBuffer->Play(0, 0, DSBPLAY_LOOPING);
 
 			/***************************************************************************************************/
-
+			LARGE_INTEGER LastCounter;
+			QueryPerformanceCounter(&LastCounter);
+			int64 LastCycleCount = __rdtsc();
 			while (GlobalRunning)
 			{
+				LARGE_INTEGER BeginCounter;
+				QueryPerformanceCounter(&BeginCounter);
+
 				MSG Message;
 				while (PeekMessage(&Message, 0, 0, 0, PM_REMOVE))
 				{
@@ -480,7 +486,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 							XOffset += StickX / 10000;
 							YOffset += StickY / 10000;
 
-							SoundOutput.ToneHz = 512 + (int)(256.0f * ((real32)StickX / 30000.0f));
+							SoundOutput.ToneHz = 512 + (int)(512.0f * ((real32)StickX / 30000.0f));
 							SoundOutput.WavePeriod = SoundOutput.SamplesPerSec / SoundOutput.ToneHz;
 						}
 					}
@@ -525,6 +531,24 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
 
 				}
 #pragma endregion
+				int64 EndCycleCount = __rdtsc();
+
+
+				LARGE_INTEGER EndCounter;
+				QueryPerformanceCounter(&EndCounter);
+
+				// TODO Display the value here
+				int64 CycleElapsed = EndCycleCount - LastCycleCount;
+				int64 CounterElapsed = EndCounter.QuadPart - LastCounter.QuadPart;
+				int32 MSPerFrame = (int32)(1000 * CounterElapsed)/PerfCounterFreq;
+				int32 FPS = PerfCounterFreq / CounterElapsed;
+				int32 MCPF = (int32) (CycleElapsed / (1000000));
+				char Buffer[256];
+				wsprintf(Buffer, "%dms/f, %df/s, %dmc/f\n", MSPerFrame, FPS, MCPF);
+				OutputDebugString(Buffer);
+
+				LastCounter = EndCounter;
+				LastCycleCount = EndCycleCount;
 			}
 		}
 		else
